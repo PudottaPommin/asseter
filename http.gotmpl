@@ -1,0 +1,41 @@
+{{- /*gotype: github.com/pudottapommin/asseter.templateModel*/ -}}
+{{define "http_body.gotmpl"}}
+    {{if .IsEmbed}}
+        func FS() http.FileSystem {
+            staticSub, _ := fs.Sub(assetsFS, "{{.DistDir}}")
+            return http.FS(staticSub)
+        }
+    {{else}}
+        func FS() http.FileSystem {
+            return http.Dir("{{.DistDir}}")
+        }
+    {{end}}
+
+    type Handler interface {
+        Handle(prefix string, handler http.Handler)
+    }
+
+    func Register(h Handler) {
+        h.Handle("{{.UrlPrefix}}/{{if eq .Server "chi"}}*{{end}}", http.StripPrefix("{{.UrlPrefix}}/", staticHandler{}))
+    }
+
+    type staticHandler struct {}
+    func (h staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+        for k, v := range AssetsMap {
+            if r.URL.Path == v[0] {
+                r.URL.Path = k
+                http.FileServer(FS()).ServeHTTP(w, r)
+                return
+            }
+        }
+        {{- if ne .WebDir ""}}
+        http.FileServer(http.Dir("{{.WebDir}}")).ServeHTTP(w, r)
+        {{- end}}
+    }
+{{end}}
+
+{{define "http_imports.gotmpl"}}
+    {{- if .IsEmbed}}
+        "io/fs"
+    {{- end}}
+{{end}}

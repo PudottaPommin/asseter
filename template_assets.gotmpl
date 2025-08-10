@@ -4,23 +4,15 @@
 package {{.Pkg}}
 
 import (
-    {{- if .IsEmbed}}
+    {{if .IsEmbed}}
         "embed"
     {{- end}}
-    {{- if eq .Server "http"}}
-        {{- if .IsEmbed}}
-            "io/fs"
-        {{- end}}
-    {{- end}}
     "net/http"
-
-    {{if eq .Server "gin"}}
-        {{- if .IsEmbed}}
-        "strings"
-        "github.com/gin-contrib/static"
-        {{- end}}
-        "github.com/gin-gonic/gin"
-    {{end}}
+{{- if eq .Server "gin"}}
+    {{template "gin_imports.gotmpl" .}}
+{{else}}
+    {{template "http_imports.gotmpl" .}}
+{{- end}}
 )
 
 // assetsMap is a map of assets, where the key maps to the path on FS and the value[0] is filename and value[1] is the URL path.
@@ -46,55 +38,9 @@ func (m assetsMap) Url(key string) string {
     return ""
 }
 
-    {{if eq .Server "gin"}}
-        {{if .IsEmbed}}
-            func FS() http.FileSystem {
-                fsSys, _ := static.EmbedFolder(assetsFS, "dist")
-                return fsSys
-            }
-
-            func Register(domain *gin.RouterGroup) {
-                afs := FS()
-                for k, v := range AssetsMap {
-                    domain.StaticFileFS(v[0], strings.TrimPrefix(k, "/"), afs)
-                }
-            }
-        {{else}}
-            func FS() http.FileSystem {
-                return gin.Dir("{{.DistDir}}", false)
-            }
-
-            func Register(domain *gin.RouterGroup) {
-                afs := FS()
-                domain.StaticFS("/", afs)
-            }
-        {{end}}
-    {{else if eq .Server "http"}}
-        {{if .IsEmbed}}
-            func FS() http.FileSystem {
-                staticSub, _ := fs.Sub(assetsFS, "{{.DistDir}}")
-                return http.FS(staticSub)
-            }
-        {{else}}
-            func FS() http.FileSystem {
-                return http.Dir("{{.DistDir}}")
-            }
-        {{end}}
-
-
-        func Register(m *http.ServeMux) {
-            m.Handle("{{.UrlPrefix}}/", http.StripPrefix("{{.UrlPrefix}}/", assetHandler{}))
-        }
-
-        type assetHandler struct {}
-        func (h assetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-            for k, v := range AssetsMap {
-                if r.URL.Path == v[0] {
-                    r.URL.Path = k
-                    http.FileServer(FS()).ServeHTTP(w, r)
-                    return
-                }
-            }
-        }
-    {{end}}
+{{if eq .Server "gin"}}
+    {{template "gin_body.gotmpl" .}}
+{{else}}
+    {{template "http_body.gotmpl" .}}
+{{end}}
 {{end}}

@@ -80,6 +80,7 @@ func newAssetsHandlerFromCLI() (cmd *asseter.AssetsHandler, err error) {
 	flagSet.StringVar(&o.Cwd, "cwd", "", "Working directory ( where are node_modules )")
 	flagSet.StringVar(&o.SrcDir, "src", "dist", "Directory for assets")
 	flagSet.StringVar(&o.DistDir, "dist", "assets", "Directory where assets will be generated")
+	flagSet.StringVar(&o.WebDir, "web", "", "Serve assets from web directory")
 	flagSet.StringVar(&o.Pkg, "pkg", "assets", "Package name for generated file")
 	flagSet.StringVar(&o.Server, "server", "http", "Binding for HTTP server (http,gin)")
 	flagSet.StringVar(&o.UrlPrefix, "urlPrefix", "/static", "URL path to prepend to all assets")
