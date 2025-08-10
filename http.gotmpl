@@ -16,15 +16,17 @@
     }
 
     func Register(h Handler) {
-        h.Handle("{{.UrlPrefix}}/{{if eq .Server "chi"}}*{{end}}", http.StripPrefix("{{.UrlPrefix}}/", staticHandler{}))
+        h.Handle("{{.UrlPrefix}}/{{if eq .Server "chi"}}*{{end}}", http.StripPrefix("{{.UrlPrefix}}/", staticHandler{fsHandler: http.FileServer(FS())}))
     }
 
-    type staticHandler struct {}
+    type staticHandler struct {
+        fsHandler http.Handler
+    }
     func (h staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         for k, v := range AssetsMap {
             if r.URL.Path == v[0] {
                 r.URL.Path = k
-                http.FileServer(FS()).ServeHTTP(w, r)
+                h.fsHandler.ServeHTTP(w, r)
                 return
             }
         }
