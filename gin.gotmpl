@@ -1,0 +1,40 @@
+{{- /*gotype: github.com/pudottapommin/asseter.templateModel*/ -}}
+{{define "gin_body.gotmpl"}}
+    func (m assetsMap) Url(key string) string {
+        if v, ok := m[key]; ok {
+            return v[1]
+        }
+        return ""
+    }
+
+    {{if .IsEmbed}}
+        func FS() http.FileSystem {
+            fsSys, _ := static.EmbedFolder(assetsFS, "dist")
+            return fsSys
+        }
+
+        func Register(domain *gin.RouterGroup) {
+            afs := FS()
+            for k, v := range AssetsMap {
+                domain.StaticFileFS(v[0], strings.TrimPrefix(k, "/"), afs)
+            }
+        }
+    {{else}}
+        func FS() http.FileSystem {
+            return gin.Dir("{{.DistDir}}", false)
+        }
+
+        func Register(domain *gin.RouterGroup) {
+            afs := FS()
+            domain.StaticFS("/", afs)
+        }
+    {{end}}
+{{end}}
+
+{{define "gin_imports.gotmpl"}}
+    {{- if .IsEmbed}}
+        "strings"
+        "github.com/gin-contrib/static"
+    {{- end}}
+    "github.com/gin-gonic/gin"
+{{end}}

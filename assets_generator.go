@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"embed"
-	_ "embed"
 	"errors"
 	"fmt"
 	"go/format"
@@ -28,6 +27,7 @@ type (
 	templateModel struct {
 		Server    string
 		DistDir   string
+		WebDir    string
 		Pkg       string
 		Files     []*templateFileInfo
 		IsEmbed   bool
@@ -48,6 +48,7 @@ type (
 		cwd        string
 		srcDir     string
 		distDir    string
+		webDir     string
 		pkg        string
 		urlPrefix  string
 		server     string
@@ -63,6 +64,7 @@ type (
 		Cwd        string
 		SrcDir     string
 		DistDir    string
+		WebDir     string
 		Pkg        string
 		UrlPrefix  string
 		Server     string
@@ -77,6 +79,7 @@ func NewAssetsHandler(opts AssetsOptions) (cmd *AssetsHandler, err error) {
 		cwd:        opts.Cwd,
 		srcDir:     opts.SrcDir,
 		distDir:    opts.DistDir,
+		webDir:     opts.WebDir,
 		pkg:        opts.Pkg,
 		urlPrefix:  opts.UrlPrefix,
 		server:     opts.Server,
@@ -153,6 +156,7 @@ func (cmd *AssetsHandler) renderTemplate(_ context.Context) (err error) {
 		DistDir:   dd,
 		Pkg:       cmd.pkg,
 		UrlPrefix: cmd.urlPrefix,
+		WebDir:    cmd.webDir,
 		IsEmbed:   cmd.isEmbed,
 		Server:    cmd.server,
 		Files:     make([]*templateFileInfo, 0, 10),
