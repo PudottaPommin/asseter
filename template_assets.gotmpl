@@ -35,7 +35,7 @@ func (m assetsMap) Url(key string) string {
     if v, ok := m[key]; ok {
         return v[1]
     }
-    return ""
+    return key
 }
 
 {{if eq .Server "gin"}}

@@ -1,12 +1,5 @@
 {{- /*gotype: github.com/pudottapommin/asseter.templateModel*/ -}}
 {{define "gin_body.gotmpl"}}
-    func (m assetsMap) Url(key string) string {
-        if v, ok := m[key]; ok {
-            return v[1]
-        }
-        return ""
-    }
-
     {{if .IsEmbed}}
         func FS() http.FileSystem {
             fsSys, _ := static.EmbedFolder(assetsFS, "dist")
