@@ -66,30 +66,6 @@ func newCopyHandlerFromCLI() (cmd *asseter.CopyHandler, err error) {
 	return
 }
 
-// func newAssetsHandlerFromCLI() (cmd *asseter.AssetsHandler, err error) {
-// 	o := asseter.AssetsOptions{}
-// 	flagSet := flag.NewFlagSet("gen", flag.ExitOnError)
-// 	flagSet.StringVar(&o.Cwd, "cwd", "", "Working directory ( where are node_modules )")
-// 	flagSet.StringVar(&o.SrcDir, "src", "dist", "Directory for assets")
-// 	flagSet.StringVar(&o.DistDir, "dist", "assets", "Directory where assets will be generated")
-// 	flagSet.StringVar(&o.WebDir, "web", "", "Serve assets from web directory")
-// 	flagSet.StringVar(&o.Pkg, "pkg", "assets", "Package name for generated file")
-// 	flagSet.StringVar(&o.Server, "server", "http", "Binding for HTTP server (http,gin)")
-// 	flagSet.StringVar(&o.UrlPrefix, "urlPrefix", "/static", "URL path to prepend to all assets")
-// 	flagSet.BoolVar(&o.IsEmbed, "embed", false, "Flag to embed assets into binary")
-// 	flagSet.BoolVar(&o.ShouldHash, "hash", false, "Flag to hash assets files")
-// 	flagSet.Var(&o.Exclude, "exclude", "Exclude paths by glob")
-// 	if err = flagSet.Parse(os.Args[2:]); err != nil {
-// 		return nil, err
-// 	}
-//
-// 	cmd, err = asseter.NewAssetsHandler(o)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return
-// }
-
 func newAssetsHandlerFromCLI() (cmd *asseter.AssetsFsHandler, err error) {
 	o := asseter.AssetsFsOptions{}
 	flagSet := flag.NewFlagSet("gen", flag.ExitOnError)
