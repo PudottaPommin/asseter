@@ -19,11 +19,18 @@ type normalBlob struct {
     data []byte
 }
 
+func (b *normalBlob) Reader() io.ReadSeeker { return bytes.NewReader(b.data) }
+
 type compressedBlob struct {
     name string
     mtime time.Time
     uncompressedSize int64
     data []byte
+}
+
+func (b *compressedBlob) Reader() *zstd.Decoder {
+    r, _ := zstd.NewReader(bytes.NewReader(b.data))
+    return r
 }
 
 var (
@@ -33,11 +40,17 @@ var (
     {{- end}}
     }
 
+    hashedMap = map[string]string{
+    {{- range .Files}}
+        "{{.HashedName}}": "{{.Path}}",
+    {{- end}}
+    }
+
     dirs = map[string][]fs.DirEntry{
     {{- range $k, $e := .Dirs}}
         "{{$k}}": {
         {{- range $e}}
-            direntry{"{{.Name}}", {{.IsDir}}},
+            direntry{"{{.Name}}", {{.IsDir}}, time.Unix({{.ModTime.Unix}}, 0), {{.Size}}},
         {{- end}}
         },
     {{- end}}
@@ -45,7 +58,7 @@ var (
 
     files = map[string]any {
     {{- range .Files}}
-        "{{.Path}}": {{- if .CompressedData -}}
+        "{{.Path}}": {{ if .CompressedData -}}
             compressedBlob{"{{.Name}}", time.Unix({{.ModTime.Unix}}, 0), {{.UncompressedSize}}, []byte({{printf "%+q" .CompressedData}})},
         {{- else -}}
             normalBlob{"{{.Name}}", time.Unix({{.ModTime.Unix}}, 0), []byte({{printf "%+q" .UncompressedData}})},
@@ -58,11 +71,8 @@ type assets struct {}
 var Assets = assets{}
 
 func (a assets) Open(name string) (fs.File, error) {
-    for k, v := range hashesMap {
-        if name == v[0] {
-            name = k
-            break
-        }
+    if p, ok := hashedMap[name]; ok {
+        name = p
     }
 
     f, ok := files[name]
@@ -72,10 +82,9 @@ func (a assets) Open(name string) (fs.File, error) {
     hm := hashesMap[name]
     switch f := f.(type) {
     case normalBlob:
-        return file{name: f.name, hashedName: hm[0], hash: hm[1], mtime: f.mtime, size: int64(len(f.data)), data: bytes.NewReader(f.data)}, nil
+        return &file{name: f.name, hashedName: hm[0], hash: hm[1], mtime: f.mtime, size: int64(len(f.data)), data: f.Reader()}, nil
     case compressedBlob:
-        r, _ := zstd.NewReader(bytes.NewReader(f.data))
-        return &compressedFile{name: f.name, hashedName: hm[0], hash: hm[1], mtime: f.mtime, size: f.uncompressedSize, decoder: r, data: f.data}, nil
+        return &compressedFile{name: f.name, hashedName: hm[0], hash: hm[1], mtime: f.mtime, size: f.uncompressedSize, decoder: f.Reader(), data: f.data}, nil
     default:
         panic("unreachable")
     }
@@ -106,22 +115,22 @@ type file struct {
 
 var _ io.ReadSeeker = (*file)(nil)
 
-func (f file) Stat() (fs.FileInfo, error) {
-    return fileinfo{name: f.name, size: f.size}, nil
+func (f *file) Stat() (fs.FileInfo, error) {
+    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime}, nil
 }
 
-func (f file) Read(p []byte) (int, error) {
+func (f *file) Read(p []byte) (int, error) {
     return f.data.Read(p)
 }
 
-func (f file) Seek(offset int64, whence int) (int64, error) {
+func (f *file) Seek(offset int64, whence int) (int64, error) {
     return f.data.Seek(offset, whence)
 }
 
-func (f file) Close() error { return nil }
+func (f *file) Close() error { return nil }
 
-func (f file) HashedName() string { return f.hashedName }
-func (f file) Hash() string { return f.hash }
+func (f *file) HashedName() string { return f.hashedName }
+func (f *file) Hash() string { return f.hash }
 
 type compressedFile struct {
     name string
@@ -138,7 +147,7 @@ type compressedFile struct {
 var _ io.ReadSeeker = (*compressedFile)(nil)
 
 func (f *compressedFile) Stat() (fs.FileInfo, error) {
-    return fileinfo{name: f.name, size: f.size}, nil
+    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime}, nil
 }
 
 func (f *compressedFile) Read(p []byte) (int, error) {
@@ -149,7 +158,7 @@ func (f *compressedFile) Read(p []byte) (int, error) {
         f.zstdPos = 0
     }
     if f.zstdPos < f.seekPos {
-        if _, err := io.CopyN(io.Discard, f.decoder, f.seekPos - f.zstdPos); err != nil {
+        if _, err := io.CopyN(io.Discard, f.decoder, f.seekPos-f.zstdPos); err != nil {
             return 0, err
         }
         f.zstdPos = f.seekPos
@@ -161,14 +170,21 @@ func (f *compressedFile) Read(p []byte) (int, error) {
 }
 
 func (f *compressedFile) Seek(offset int64, whence int) (int64, error) {
+    var newPos int64
     switch whence {
-        case io.SeekStart:
-            f.seekPos = 0 + offset
-        case io.SeekCurrent:
-            f.seekPos += offset
-        case io.SeekEnd:
-            f.seekPos = f.size + offset
+    case io.SeekStart:
+        newPos = offset
+    case io.SeekCurrent:
+        newPos = f.seekPos + offset
+    case io.SeekEnd:
+        newPos = f.size + offset
+    default:
+        return 0, fs.ErrInvalid
     }
+    if newPos < 0 {
+        return 0, &fs.PathError{Op: "seek", Path: f.name, Err: fs.ErrInvalid}
+    }
+    f.seekPos = newPos
     return f.seekPos, nil
 }
 
@@ -198,6 +214,8 @@ func (f fileinfo) Sys() any           { return nil }
 type direntry struct {
     name string
     isDir bool
+    mtime time.Time
+    size int64
 }
 func (d direntry) Name() string { return d.name }
 func (d direntry) IsDir() bool  { return d.isDir }
@@ -207,5 +225,7 @@ func (d direntry) Type() fs.FileMode {
     }
     return 0o444
 }
-func (direntry) Info() (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+func (d direntry) Info() (fs.FileInfo, error) {
+    return &fileinfo{name: d.name, mtime: d.mtime, size: d.size}, nil
+}
 {{end}}
