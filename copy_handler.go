@@ -176,11 +176,24 @@ func (cmd *CopyHandler) normalizeDirPaths() (err error) {
 		if err != nil {
 			return
 		}
-		cmd.cwd = filepath.ToSlash(path.Clean(cmd.cwd))
 	}
-	cmd.srcDir = filepath.ToSlash(path.Join(cmd.cwd, cmd.srcDir))
-	cmd.distDir = filepath.ToSlash(path.Join(cmd.cwd, cmd.distDir))
-	cmd.distFontsDir = filepath.ToSlash(path.Join(cmd.distDir, cmd.distFontsDir))
+	cmd.cwd = filepath.ToSlash(filepath.Clean(cmd.cwd))
+
+	if !filepath.IsAbs(cmd.srcDir) {
+		cmd.srcDir = filepath.Join(cmd.cwd, cmd.srcDir)
+	}
+	cmd.srcDir = filepath.ToSlash(filepath.Clean(cmd.srcDir))
+
+	if !filepath.IsAbs(cmd.distDir) {
+		cmd.distDir = filepath.Join(cmd.cwd, cmd.distDir)
+	}
+	cmd.distDir = filepath.ToSlash(filepath.Clean(cmd.distDir))
+
+	if !filepath.IsAbs(cmd.distFontsDir) {
+		cmd.distFontsDir = filepath.Join(cmd.distDir, cmd.distFontsDir)
+	}
+	cmd.distFontsDir = filepath.ToSlash(filepath.Clean(cmd.distFontsDir))
+
 	return
 }
 

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,14 +11,26 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+var version = "dev"
+
 func main() {
-	app := &cli.Command{
-		Name:  "asseter",
-		Usage: "Asset management tool",
+	app := newApp()
+	if err := app.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newApp() *cli.Command {
+	return &cli.Command{
+		Name:    "asseter",
+		Usage:   "Asset management tool",
+		Version: version,
 		Commands: []*cli.Command{
 			{
-				Name:  "copy",
-				Usage: "Copy assets to output directory",
+				Name:   "copy",
+				Usage:  "Copy assets to output directory",
+				Before: validateCopyFlags,
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:  "cwd",
@@ -36,7 +47,7 @@ func main() {
 						Usage: "Dist directory for assets",
 					},
 					&cli.StringFlag{
-						Name:  "fontDist",
+						Name:  "font-dist",
 						Value: "files",
 						Usage: "Fonts dist directory rooted from dist",
 					},
@@ -52,8 +63,9 @@ func main() {
 				Action: handleCopy,
 			},
 			{
-				Name:  "generate",
-				Usage: "Generate bindata assets",
+				Name:   "generate",
+				Usage:  "Generate bindata assets",
+				Before: validateGenerateFlags,
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:  "cwd",
@@ -75,79 +87,125 @@ func main() {
 						Usage: "Package name for generated file",
 					},
 				},
-				Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-					// Validate and clean cwd
-					cwdPath := cmd.String("cwd")
-					if cwdPath == "" {
-						wd, err := os.Getwd()
-						if err != nil {
-							return ctx, fmt.Errorf("failed to get working directory: %w", err)
-						}
-						cwdPath = wd
-					}
-					cwdPath = filepath.Clean(cwdPath)
-					absCwd, err := filepath.Abs(cwdPath)
-					if err != nil {
-						return ctx, fmt.Errorf("failed to get absolute path for cwd: %w", err)
-					}
-					if err = cmd.Set("cwd", absCwd); err != nil {
-						return ctx, fmt.Errorf("failed to set cwd: %w", err)
-					}
-
-					// Validate and clean src
-					srcPath := cmd.String("src")
-					srcPath = filepath.Clean(srcPath)
-					if !filepath.IsAbs(srcPath) {
-						srcPath = filepath.Join(absCwd, srcPath)
-					}
-					absSrc, err := filepath.Abs(srcPath)
-					if err != nil {
-						return ctx, fmt.Errorf("failed to get absolute path for src: %w", err)
-					}
-					info, err := os.Stat(absSrc)
-					if err != nil {
-						return ctx, fmt.Errorf("failed to access src path: %w", err)
-					}
-					if !info.IsDir() {
-						return ctx, fmt.Errorf("src must be a directory, not a file: %s", absSrc)
-					}
-					if err = cmd.Set("src", absSrc); err != nil {
-						return ctx, fmt.Errorf("failed to set src: %w", err)
-					}
-
-					// Validate and clean out
-					outPath := cmd.String("out")
-					outPath = filepath.Clean(outPath)
-					if !filepath.IsAbs(outPath) {
-						outPath = filepath.Join(absCwd, outPath)
-					}
-					absOut, err := filepath.Abs(outPath)
-					if err != nil {
-						return ctx, fmt.Errorf("failed to get absolute path for out: %w", err)
-					}
-					if outInfo, err := os.Stat(absOut); err == nil && outInfo.IsDir() {
-						absOut = filepath.Join(absOut, "bindata.asseter.go")
-					}
-					outDir := filepath.Dir(absOut)
-					if dirInfo, err := os.Stat(outDir); err != nil {
-						return ctx, fmt.Errorf("output directory does not exist: %s", outDir)
-					} else if !dirInfo.IsDir() {
-						return ctx, fmt.Errorf("output directory path is not a directory: %s", outDir)
-					}
-					if err = cmd.Set("out", absOut); err != nil {
-						return ctx, fmt.Errorf("failed to set out: %w", err)
-					}
-
-					return ctx, nil
-				},
 				Action: handleGen,
 			},
 		},
 	}
+}
 
-	if err := app.Run(context.Background(), os.Args); err != nil {
-		log.Panicf("Error: %v\n", err)
+func validateCopyFlags(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+	absCwd, err := resolveCwd(cmd)
+	if err != nil {
+		return ctx, err
 	}
+
+	// Resolve and validate src
+	srcPath := cmd.String("src")
+	absSrc, err := resolvePath(absCwd, srcPath)
+	if err != nil {
+		return ctx, fmt.Errorf("failed to resolve src path: %w", err)
+	}
+	if info, err := os.Stat(absSrc); err != nil {
+		return ctx, fmt.Errorf("failed to access src path: %w", err)
+	} else if !info.IsDir() {
+		return ctx, fmt.Errorf("src must be a directory: %s", absSrc)
+	}
+	if err = cmd.Set("src", absSrc); err != nil {
+		return ctx, err
+	}
+
+	// Resolve and validate dist
+	distPath := cmd.String("dist")
+	absDist, err := resolvePath(absCwd, distPath)
+	if err != nil {
+		return ctx, fmt.Errorf("failed to resolve dist path: %w", err)
+	}
+	if err = cmd.Set("dist", absDist); err != nil {
+		return ctx, err
+	}
+
+	// Resolve font-dist relative to dist
+	fontDistPath := cmd.String("font-dist")
+	absFontDist, err := resolvePath(absDist, fontDistPath)
+	if err != nil {
+		return ctx, fmt.Errorf("failed to resolve font-dist path: %w", err)
+	}
+	if err = cmd.Set("font-dist", absFontDist); err != nil {
+		return ctx, err
+	}
+
+	return ctx, nil
+}
+
+func validateGenerateFlags(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+	absCwd, err := resolveCwd(cmd)
+	if err != nil {
+		return ctx, err
+	}
+
+	// Resolve and validate src
+	srcPath := cmd.String("src")
+	absSrc, err := resolvePath(absCwd, srcPath)
+	if err != nil {
+		return ctx, fmt.Errorf("failed to resolve src path: %w", err)
+	}
+	if info, err := os.Stat(absSrc); err != nil {
+		return ctx, fmt.Errorf("failed to access src path: %w", err)
+	} else if !info.IsDir() {
+		return ctx, fmt.Errorf("src must be a directory: %s", absSrc)
+	}
+	if err = cmd.Set("src", absSrc); err != nil {
+		return ctx, err
+	}
+
+	// Resolve and validate out
+	outPath := cmd.String("out")
+	absOut, err := resolvePath(absCwd, outPath)
+	if err != nil {
+		return ctx, fmt.Errorf("failed to resolve out path: %w", err)
+	}
+	if info, err := os.Stat(absOut); err == nil && info.IsDir() {
+		absOut = filepath.Join(absOut, "bindata.asseter.go")
+	}
+
+	outDir := filepath.Dir(absOut)
+	if info, err := os.Stat(outDir); err != nil {
+		return ctx, fmt.Errorf("output directory does not exist: %s", outDir)
+	} else if !info.IsDir() {
+		return ctx, fmt.Errorf("output path parent is not a directory: %s", outDir)
+	}
+	if err = cmd.Set("out", absOut); err != nil {
+		return ctx, err
+	}
+
+	return ctx, nil
+}
+
+func resolveCwd(cmd *cli.Command) (string, error) {
+	cwdPath := cmd.String("cwd")
+	if cwdPath == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get working directory: %w", err)
+		}
+		cwdPath = wd
+	}
+	absCwd, err := filepath.Abs(cwdPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path for cwd: %w", err)
+	}
+	if err = cmd.Set("cwd", absCwd); err != nil {
+		return "", err
+	}
+	return absCwd, nil
+}
+
+func resolvePath(base, path string) (string, error) {
+	p := filepath.Clean(path)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+	return filepath.Abs(p)
 }
 
 func handleCopy(ctx context.Context, cmd *cli.Command) error {
@@ -156,7 +214,7 @@ func handleCopy(ctx context.Context, cmd *cli.Command) error {
 		Cwd:          cmd.String("cwd"),
 		SrcDir:       cmd.String("src"),
 		DistDir:      cmd.String("dist"),
-		DistFontsDir: cmd.String("fontDist"),
+		DistFontsDir: cmd.String("font-dist"),
 		Exclude:      asseter.FileMatchFlag(cmd.StringSlice("exclude")),
 		Fonts:        asseter.FontSourceFontsFlag(cmd.StringSlice("font")),
 	}
