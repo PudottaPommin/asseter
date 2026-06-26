@@ -76,6 +76,8 @@ func (h *AssetsFsHandler) Run() error {
 	files := make([]file, 0)
 	dirs := make(map[string][]direntry)
 
+	var cmpBuf []byte
+
 	if err = fs.WalkDir(rfs, ".", func(fp string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -116,15 +118,17 @@ func (h *AssetsFsHandler) Run() error {
 			return err
 		}
 
-		dst := enc.EncodeAll(src, nil)
-		if len(dst) < len(src) {
+		cmpBuf = enc.EncodeAll(src, cmpBuf[:0])
+		if len(cmpBuf) < len(src) {
+			compressedCopy := make([]byte, len(cmpBuf))
+			copy(compressedCopy, cmpBuf)
 			files = append(files, file{
 				Path:             fp,
 				Name:             path.Base(fp),
 				Hash:             hashBytes(src),
 				ModTime:          fi.ModTime(),
 				UncompressedSize: len(src),
-				CompressedData:   dst,
+				CompressedData:   compressedCopy,
 			})
 		} else {
 			files = append(files, file{
