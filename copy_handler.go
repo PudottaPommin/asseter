@@ -103,16 +103,26 @@ func (cmd *CopyHandler) copyFile(buffer *bytes.Buffer, p string) error {
 	if err != nil {
 		return err
 	}
-	distFilePath := filepath.Join(cmd.distDir, filepath.Base(p))
+	var distFilePath string
 	if matched, _ := filepath.Match("*.woff2", info.Name()); matched {
 		if _, err = os.Stat(cmd.distFontsDir); err != nil {
 			if os.IsNotExist(err) {
-				if err = os.Mkdir(cmd.distFontsDir, 0755); err != nil {
+				if err = os.MkdirAll(cmd.distFontsDir, 0755); err != nil {
 					return err
 				}
 			}
 		}
 		distFilePath = filepath.Join(cmd.distFontsDir, filepath.Base(p))
+	} else {
+		rel, err := filepath.Rel(cmd.srcDir, p)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			distFilePath = filepath.Join(cmd.distDir, filepath.Base(p))
+		} else {
+			distFilePath = filepath.Join(cmd.distDir, rel)
+		}
+		if err := os.MkdirAll(filepath.Dir(distFilePath), 0755); err != nil {
+			return err
+		}
 	}
 	dst, err := os.OpenFile(distFilePath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, info.Mode())
 	if err != nil {
@@ -130,12 +140,28 @@ func (cmd *CopyHandler) walkSources(ctx context.Context) error {
 			return err
 		}
 		p = filepath.ToSlash(p)
-		if strings.HasPrefix(p, cmd.distDir) || p == cmd.srcDir {
+
+		if p == cmd.distDir || strings.HasPrefix(p, cmd.distDir+"/") {
+			if de.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
+		if p == cmd.srcDir {
+			return nil
+		}
+
 		if cmd.exclude.Match(p) {
+			if de.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
+
+		if de.IsDir() {
+			return nil
+		}
+
 		select {
 		case cmd.filesCh <- p:
 		case <-ctx.Done():
@@ -217,7 +243,8 @@ func (cmd *CopyHandler) cleanDest(ctx context.Context) (err error) {
 		return nil
 	})
 	if err == nil {
-		for _, d := range dirs {
+		for i := len(dirs) - 1; i >= 0; i-- {
+			d := dirs[i]
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
