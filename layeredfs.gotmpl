@@ -8,6 +8,7 @@ import (
     "bytes"
     "io"
     "io/fs"
+    "path"
     "time"
 
     "github.com/klauspost/compress/zstd"
@@ -77,6 +78,9 @@ func (a assets) Open(name string) (fs.File, error) {
 
     f, ok := files[name]
     if !ok {
+        if d, isDir := dirs[name]; isDir {
+            return &dirFile{name: name, entries: d}, nil
+        }
         return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
     }
     hm := hashesMap[name]
@@ -104,6 +108,42 @@ func (a assets) HashedByPath(name string) string {
     return name
 }
 
+type dirFile struct {
+    name string
+    entries []fs.DirEntry
+    offset int
+}
+
+var _ fs.ReadDirFile = (*dirFile)(nil)
+
+func (d *dirFile) Stat() (fs.FileInfo, error) {
+    return &fileinfo{name: path.Base(d.name), isDir: true, mtime: time.Time{}}, nil
+}
+
+func (d *dirFile) Read([]byte) (int, error) {
+    return 0, &fs.PathError{Op: "read", Path: d.name, Err: fs.ErrInvalid}
+}
+
+func (d *dirFile) Close() error {
+    return nil
+}
+
+func (d *dirFile) ReadDir(n int) ([]fs.DirEntry, error) {
+    if n <= 0 {
+        return d.entries, nil
+    }
+    if d.offset >= len(d.entries) {
+        return nil, io.EOF
+    }
+    end := d.offset + n
+    if end > len(d.entries) {
+        end = len(d.entries)
+    }
+    res := d.entries[d.offset:end]
+    d.offset = end
+    return res, nil
+}
+
 type file struct {
     name string
     hashedName string
@@ -116,7 +156,7 @@ type file struct {
 var _ io.ReadSeeker = (*file)(nil)
 
 func (f *file) Stat() (fs.FileInfo, error) {
-    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime}, nil
+    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime, isDir: false}, nil
 }
 
 func (f *file) Read(p []byte) (int, error) {
@@ -147,7 +187,7 @@ type compressedFile struct {
 var _ io.ReadSeeker = (*compressedFile)(nil)
 
 func (f *compressedFile) Stat() (fs.FileInfo, error) {
-    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime}, nil
+    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime, isDir: false}, nil
 }
 
 func (f *compressedFile) Read(p []byte) (int, error) {
@@ -202,13 +242,19 @@ type fileinfo struct {
     name string
     size int64
     mtime time.Time
+    isDir bool
 }
 
 func (f fileinfo) Name() string       { return f.name }
 func (f fileinfo) Size() int64        { return f.size }
-func (f fileinfo) Mode() fs.FileMode  { return 0o444 }
+func (f fileinfo) Mode() fs.FileMode  {
+    if f.isDir {
+        return 0o755 | fs.ModeDir
+    }
+    return 0o444
+}
 func (f fileinfo) ModTime() time.Time { return f.mtime }
-func (f fileinfo) IsDir() bool        { return false }
+func (f fileinfo) IsDir() bool        { return f.isDir }
 func (f fileinfo) Sys() any           { return nil }
 
 type direntry struct {
@@ -226,6 +272,6 @@ func (d direntry) Type() fs.FileMode {
     return 0o444
 }
 func (d direntry) Info() (fs.FileInfo, error) {
-    return &fileinfo{name: d.name, mtime: d.mtime, size: d.size}, nil
+    return &fileinfo{name: d.name, mtime: d.mtime, size: d.size, isDir: d.isDir}, nil
 }
 {{end}}
