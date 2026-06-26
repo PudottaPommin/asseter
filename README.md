@@ -38,7 +38,18 @@ Copies static assets from a source directory to a distribution directory, with o
 | `-exclude`  | -         | Exclude paths by glob pattern (can be used multiple times)               |
 | `-font`     | -         | Font source names to copy from node_modules (can be used multiple times) |
 
-[//]: # (**Examples:**)
+**Examples:**
+
+```sh
+# Basic copy from 'src' to 'dist'
+asseter copy -src src -dist dist
+
+# Copy assets and extract specific fonts from node_modules
+asseter copy -src src -dist dist -font inter -font "roboto-mono"
+
+# Copy assets but exclude source map files and typescript files
+asseter copy -src src -dist dist -exclude "*.map" -exclude "*.ts"
+```
 
 #### `gen` - Generate assets_gen.go file
 
@@ -60,8 +71,46 @@ Generates Go code for serving static assets with optional embedding and versioni
 | `-hash`      | `false`     | Generate versioned asset filenames with hashes             |
 | `-exclude`   | -           | Exclude paths by glob pattern (can be used multiple times) |
 
-[//]: # (**Examples:**)
+**Examples:**
 
-[//]: # (## Workflow)
+```sh
+# Generate the asset filesystem from the 'dist' folder
+asseter gen -src dist -dist internal/assets -pkg assets
 
-[//]: # (A typical workflow combines both commands:)
+# Generate embedded, hashed assets for cache-busting (standard http)
+asseter gen -src dist -dist internal/assets -pkg assets -embed -hash -urlPrefix "/static"
+```
+
+## Workflow
+
+A typical workflow combines both commands, often orchestrated via a `go:generate` directive or a build script:
+
+```sh
+# 1. Gather all assets into a staging 'dist' folder, excluding source maps
+asseter copy -src frontend/public -dist dist -exclude "*.map" -font inter
+
+# 2. Generate the compressed, embedded Go filesystem
+asseter gen -src dist -dist internal/assets -pkg assets -embed -hash -urlPrefix "/static"
+```
+
+### Using the generated assets in your Go code
+
+```go
+package main
+
+import (
+	"net/http"
+	"your-project/internal/assets" // Import the generated package
+)
+
+func main() {
+	mux := http.NewServeMux()
+	
+	// Serve the embedded static files.
+	// The generated assets.Assets implements fs.FS and gracefully handles directories and compression.
+	fileServer := http.FileServer(http.FS(assets.Assets))
+	mux.Handle("/static/", http.StripPrefix("/static/", fileServer))
+	
+	http.ListenAndServe(":8080", mux)
+}
+```
