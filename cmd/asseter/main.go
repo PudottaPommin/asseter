@@ -16,7 +16,7 @@ var version = "dev"
 func main() {
 	app := newApp()
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -85,6 +85,11 @@ func newApp() *cli.Command {
 						Name:  "pkg",
 						Value: "assets",
 						Usage: "Package name for generated file",
+					},
+					&cli.StringFlag{
+						Name:  "embed-dir",
+						Value: "_embed",
+						Usage: "Subdirectory name for embedded asset files",
 					},
 				},
 				Action: handleGen,
@@ -233,9 +238,10 @@ func handleCopy(ctx context.Context, cmd *cli.Command) error {
 func handleGen(_ context.Context, cmd *cli.Command) error {
 	t := time.Now()
 	o := asseter.AssetsFsOptions{
-		Src: cmd.String("src"),
-		Out: cmd.String("out"),
-		Pkg: cmd.String("pkg"),
+		Src:      cmd.String("src"),
+		Out:      cmd.String("out"),
+		Pkg:      cmd.String("pkg"),
+		EmbedDir: cmd.String("embed-dir"),
 	}
 
 	handler, err := asseter.NewAssetsFsHandler(o)

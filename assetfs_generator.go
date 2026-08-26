@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -20,14 +21,16 @@ import (
 
 type (
 	AssetsFsOptions struct {
-		Src string
-		Pkg string
-		Out string
+		Src      string
+		Pkg      string
+		Out      string
+		EmbedDir string
 	}
 	AssetsFsHandler struct {
-		src string
-		pkg string
-		out string
+		src      string
+		pkg      string
+		out      string
+		embedDir string
 	}
 	file struct {
 		Path             string
@@ -35,8 +38,8 @@ type (
 		Hash             string
 		ModTime          time.Time
 		UncompressedSize int
-		CompressedData   []byte
-		UncompressedData []byte
+		EmbedPath        string
+		IsCompressed     bool
 	}
 	direntry struct {
 		Name    string
@@ -45,17 +48,28 @@ type (
 		Size    int64
 	}
 	assetsFsTemplateModel struct {
-		Pkg   string
-		Files []file
-		Dirs  map[string][]direntry
+		Pkg      string
+		EmbedDir string
+		Files    []file
+		Dirs     map[string][]direntry
 	}
 )
 
 func NewAssetsFsHandler(o AssetsFsOptions) (*AssetsFsHandler, error) {
+	embedDir := o.EmbedDir
+	if embedDir == "" {
+		embedDir = "_embed"
+	}
+	embedDir = filepath.ToSlash(filepath.Clean(embedDir))
+	if filepath.IsAbs(embedDir) || strings.HasPrefix(embedDir, "../") || embedDir == ".." {
+		return nil, fmt.Errorf("embedDir must be a relative subdirectory: %s", o.EmbedDir)
+	}
+
 	return &AssetsFsHandler{
-		src: o.Src,
-		pkg: o.Pkg,
-		out: o.Out,
+		src:      o.Src,
+		pkg:      o.Pkg,
+		out:      o.Out,
+		embedDir: embedDir,
 	}, nil
 }
 
@@ -72,6 +86,14 @@ func (h *AssetsFsHandler) Run() error {
 		return err
 	}
 	defer enc.Close()
+
+	absEmbedDir := filepath.Join(filepath.Dir(h.out), filepath.FromSlash(h.embedDir))
+	if err = os.RemoveAll(absEmbedDir); err != nil {
+		return fmt.Errorf("failed to remove existing embed dir %s: %w", absEmbedDir, err)
+	}
+	if err = os.MkdirAll(absEmbedDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create embed dir %s: %w", absEmbedDir, err)
+	}
 
 	files := make([]file, 0)
 	dirs := make(map[string][]direntry)
@@ -119,26 +141,42 @@ func (h *AssetsFsHandler) Run() error {
 		}
 
 		cmpBuf = enc.EncodeAll(src, cmpBuf[:0])
+
+		var (
+			embedRelPath string
+			isCompressed bool
+			dataToWrite  []byte
+		)
+
 		if len(cmpBuf) < len(src) {
-			compressedCopy := make([]byte, len(cmpBuf))
-			copy(compressedCopy, cmpBuf)
-			files = append(files, file{
-				Path:             fp,
-				Name:             path.Base(fp),
-				Hash:             hashBytes(src),
-				ModTime:          fi.ModTime(),
-				UncompressedSize: len(src),
-				CompressedData:   compressedCopy,
-			})
+			embedRelPath = fp + ".zst"
+			isCompressed = true
+			dataToWrite = make([]byte, len(cmpBuf))
+			copy(dataToWrite, cmpBuf)
 		} else {
-			files = append(files, file{
-				Path:             fp,
-				Name:             path.Base(fp),
-				Hash:             hashBytes(src),
-				ModTime:          fi.ModTime(),
-				UncompressedData: src,
-			})
+			embedRelPath = fp
+			isCompressed = false
+			dataToWrite = src
 		}
+
+		embedPath := path.Join(h.embedDir, filepath.ToSlash(embedRelPath))
+		outFilePath := filepath.Join(absEmbedDir, filepath.FromSlash(embedRelPath))
+		if err = os.MkdirAll(filepath.Dir(outFilePath), 0o755); err != nil {
+			return fmt.Errorf("failed to create directory for %s: %w", outFilePath, err)
+		}
+		if err = os.WriteFile(outFilePath, dataToWrite, 0o644); err != nil {
+			return fmt.Errorf("failed to write embedded asset %s: %w", outFilePath, err)
+		}
+
+		files = append(files, file{
+			Path:             fp,
+			Name:             path.Base(fp),
+			Hash:             hashBytes(src),
+			ModTime:          fi.ModTime(),
+			UncompressedSize: len(src),
+			EmbedPath:        embedPath,
+			IsCompressed:     isCompressed,
+		})
 		return nil
 	}); err != nil {
 		return err
@@ -147,9 +185,10 @@ func (h *AssetsFsHandler) Run() error {
 	buffer := bytebufferpool.Get()
 	defer bytebufferpool.Put(buffer)
 	if err = tmpl.ExecuteTemplate(buffer, "assetsfs.gotmpl", assetsFsTemplateModel{
-		Pkg:   h.pkg,
-		Files: files,
-		Dirs:  dirs,
+		Pkg:      h.pkg,
+		EmbedDir: h.embedDir,
+		Files:    files,
+		Dirs:     dirs,
 	}); err != nil {
 		return fmt.Errorf("failed render outfile.go: %w", err)
 	}

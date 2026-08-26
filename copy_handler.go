@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -243,8 +244,7 @@ func (cmd *CopyHandler) cleanDest(ctx context.Context) (err error) {
 		return nil
 	})
 	if err == nil {
-		for i := len(dirs) - 1; i >= 0; i-- {
-			d := dirs[i]
+		for _, d := range slices.Backward(dirs) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

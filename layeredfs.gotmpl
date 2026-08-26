@@ -6,6 +6,7 @@ package {{.Pkg}}
 
 import (
     "bytes"
+    "embed"
     "io"
     "io/fs"
     "path"
@@ -14,24 +15,15 @@ import (
     "github.com/klauspost/compress/zstd"
 )
 
-type normalBlob struct {
-    name string
-    mtime time.Time
-    data []byte
-}
+//go:embed all:{{.EmbedDir}}
+var embeddedFS embed.FS
 
-func (b *normalBlob) Reader() io.ReadSeeker { return bytes.NewReader(b.data) }
-
-type compressedBlob struct {
-    name string
-    mtime time.Time
+type fileMeta struct {
+    name             string
+    embedPath        string
+    isCompressed     bool
+    mtime            time.Time
     uncompressedSize int64
-    data []byte
-}
-
-func (b *compressedBlob) Reader() *zstd.Decoder {
-    r, _ := zstd.NewReader(bytes.NewReader(b.data))
-    return r
 }
 
 var (
@@ -57,13 +49,9 @@ var (
     {{- end}}
     }
 
-    files = map[string]any {
+    fileMetas = map[string]fileMeta {
     {{- range .Files}}
-        "{{.Path}}": {{ if .CompressedData -}}
-            compressedBlob{"{{.Name}}", time.Unix({{.ModTime.Unix}}, 0), {{.UncompressedSize}}, []byte({{printf "%+q" .CompressedData}})},
-        {{- else -}}
-            normalBlob{"{{.Name}}", time.Unix({{.ModTime.Unix}}, 0), []byte({{printf "%+q" .UncompressedData}})},
-        {{- end -}}
+        "{{.Path}}": {"{{.Name}}", "{{.EmbedPath}}", {{.IsCompressed}}, time.Unix({{.ModTime.Unix}}, 0), {{.UncompressedSize}}},
     {{- end}}
     }
 )
@@ -76,7 +64,7 @@ func (a assets) Open(name string) (fs.File, error) {
         name = p
     }
 
-    f, ok := files[name]
+    meta, ok := fileMetas[name]
     if !ok {
         if d, isDir := dirs[name]; isDir {
             return &dirFile{name: name, entries: d}, nil
@@ -84,14 +72,35 @@ func (a assets) Open(name string) (fs.File, error) {
         return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
     }
     hm := hashesMap[name]
-    switch f := f.(type) {
-    case normalBlob:
-        return &file{name: f.name, hashedName: hm[0], hash: hm[1], mtime: f.mtime, size: int64(len(f.data)), data: f.Reader()}, nil
-    case compressedBlob:
-        return &compressedFile{name: f.name, hashedName: hm[0], hash: hm[1], mtime: f.mtime, size: f.uncompressedSize, decoder: f.Reader(), data: f.data}, nil
-    default:
-        panic("unreachable")
+    data, err := embeddedFS.ReadFile(meta.embedPath)
+    if err != nil {
+        return nil, &fs.PathError{Op: "open", Path: name, Err: err}
     }
+
+    if meta.isCompressed {
+        dec, err := zstd.NewReader(bytes.NewReader(data))
+        if err != nil {
+            return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+        }
+        return &compressedFile{
+            name:       meta.name,
+            hashedName: hm[0],
+            hash:       hm[1],
+            mtime:      meta.mtime,
+            size:       meta.uncompressedSize,
+            decoder:    dec,
+            data:       data,
+        }, nil
+    }
+
+    return &file{
+        name:       meta.name,
+        hashedName: hm[0],
+        hash:       hm[1],
+        mtime:      meta.mtime,
+        size:       int64(len(data)),
+        data:       bytes.NewReader(data),
+    }, nil
 }
 
 func (a assets) ReadDir(name string) ([]fs.DirEntry, error) {

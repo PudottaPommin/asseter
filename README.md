@@ -2,8 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/pudottapommin/asseter.svg)](https://pkg.go.dev/github.com/pudottapommin/asseter)
 
-A Go tool for managing and embedding static assets in your web applications. Asseter helps you copy, version, and
-generate code for serving static files with support for both standard `http` and `gin` web frameworks.
+A Go tool for managing and embedding static assets in your web applications. Asseter helps you copy, compress, and generate embed-backed code for serving static files.
 
 ## Requirements
 
@@ -11,7 +10,7 @@ generate code for serving static files with support for both standard `http` and
 
 ## Installation
 
-```
+```sh
 go get github.com/pudottapommin/asseter/cmd/asseter
 # or 
 go get -tool github.com/pudottapommin/asseter/cmd/asseter
@@ -25,18 +24,16 @@ go get -tool github.com/pudottapommin/asseter/cmd/asseter
 
 Copies static assets from a source directory to a distribution directory, with optional font copying from node_modules.
 
-**Usage:**
-
 **Options:**
 
-| Flag        | Default   | Description                                                              |
-|-------------|-----------|--------------------------------------------------------------------------|
-| `-cwd`      | `""`      | Working directory (where node_modules are located)                       |
-| `-src`      | `"src"`   | Source directory for assets                                              |
-| `-dist`     | `"dist"`  | Distribution directory for assets                                        |
-| `-fontDist` | `"files"` | Fonts distribution directory (rooted from dist)                          |
-| `-exclude`  | -         | Exclude paths by glob pattern (can be used multiple times)               |
-| `-font`     | -         | Font source names to copy from node_modules (can be used multiple times) |
+| Flag         | Default   | Description                                                              |
+|--------------|-----------|--------------------------------------------------------------------------|
+| `-cwd`       | `""`      | Working directory (where node_modules are located)                       |
+| `-src`       | `"src"`   | Source directory for assets                                              |
+| `-dist`      | `"dist"`  | Distribution directory for assets                                        |
+| `-font-dist` | `"files"` | Fonts distribution directory (rooted from dist)                          |
+| `-exclude`   | -         | Exclude paths by glob pattern (can be used multiple times)               |
+| `-font`      | -         | Font source names to copy from node_modules (can be used multiple times) |
 
 **Examples:**
 
@@ -51,34 +48,28 @@ asseter copy -src src -dist dist -font inter -font "roboto-mono"
 asseter copy -src src -dist dist -exclude "*.map" -exclude "*.ts"
 ```
 
-#### `gen` - Generate assets_gen.go file
+#### `generate` - Generate bindata Go file
 
-Generates Go code for serving static assets with optional embedding and versioning support.
-
-**Usage:**
+Generates Go code for serving static assets by compressing assets into a subfolder and embedding them via Go's `//go:embed` directive.
 
 **Options:**
 
-| Flag         | Default     | Description                                                |
-|--------------|-------------|------------------------------------------------------------|
-| `-cwd`       | `""`        | Working directory (where node_modules are located)         |
-| `-src`       | `"dist"`    | Directory containing assets to process                     |
-| `-dist`      | `"assets"`  | Directory where Go file will be generated                  |
-| `-pkg`       | `"assets"`  | Package name for the generated Go file                     |
-| `-server`    | `"http"`    | HTTP server binding (`http` or `gin`)                      |
-| `-urlPrefix` | `"/static"` | URL path prefix for all assets                             |
-| `-embed`     | `false`     | Embed assets into the binary                               |
-| `-hash`      | `false`     | Generate versioned asset filenames with hashes             |
-| `-exclude`   | -           | Exclude paths by glob pattern (can be used multiple times) |
+| Flag         | Default                | Description                                                |
+|--------------|------------------------|------------------------------------------------------------|
+| `-cwd`       | `""`                   | Working directory                                          |
+| `-src`       | `"assets"`             | Directory containing assets to process                     |
+| `-out`       | `"bindata.asseter.go"` | Output Go filename                                         |
+| `-pkg`       | `"assets"`             | Package name for the generated Go file                     |
+| `-embed-dir` | `"_embed"`             | Subdirectory name for embedded asset files                 |
 
 **Examples:**
 
 ```sh
 # Generate the asset filesystem from the 'dist' folder
-asseter gen -src dist -dist internal/assets -pkg assets
+asseter generate -src dist -out internal/assets/bindata.asseter.go -pkg assets
 
-# Generate embedded, hashed assets for cache-busting (standard http)
-asseter gen -src dist -dist internal/assets -pkg assets -embed -hash -urlPrefix "/static"
+# Generate with a custom embed directory name
+asseter generate -src dist -out internal/assets/bindata.asseter.go -pkg assets -embed-dir _embed
 ```
 
 ## Workflow
@@ -90,10 +81,12 @@ A typical workflow combines both commands, often orchestrated via a `go:generate
 asseter copy -src frontend/public -dist dist -exclude "*.map" -font inter
 
 # 2. Generate the compressed, embedded Go filesystem
-asseter gen -src dist -dist internal/assets -pkg assets -embed -hash -urlPrefix "/static"
+asseter generate -src dist -out internal/assets/bindata.asseter.go -pkg assets
 ```
 
 ### Using the generated assets in your Go code
+
+Build with the `bindata` build tag (`go build -tags bindata .`):
 
 ```go
 package main
