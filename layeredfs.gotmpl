@@ -10,6 +10,7 @@ import (
     "io"
     "io/fs"
     "path"
+    "sync"
     "time"
 
     "github.com/klauspost/compress/zstd"
@@ -18,8 +19,17 @@ import (
 //go:embed all:{{.EmbedDir}}
 var embeddedFS embed.FS
 
+var decoderPool = sync.Pool{
+    New: func() any {
+        d, _ := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+        return d
+    },
+}
+
 type fileMeta struct {
     name             string
+    hashedName       string
+    hash             string
     embedPath        string
     isCompressed     bool
     mtime            time.Time
@@ -27,12 +37,6 @@ type fileMeta struct {
 }
 
 var (
-    hashesMap = map[string][2]string{
-    {{- range .Files}}
-        "{{.Path}}": {"{{.HashedName}}", "{{.Hash}}"},
-    {{- end}}
-    }
-
     hashedMap = map[string]string{
     {{- range .Files}}
         "{{.HashedName}}": "{{.Path}}",
@@ -49,14 +53,23 @@ var (
     {{- end}}
     }
 
-    fileMetas = map[string]fileMeta {
+    fileMetas = map[string]fileMeta{
     {{- range .Files}}
-        "{{.Path}}": {"{{.Name}}", "{{.EmbedPath}}", {{.IsCompressed}}, time.Unix({{.ModTime.Unix}}, 0), {{.UncompressedSize}}},
+        "{{.Path}}": {
+            name:             "{{.Name}}",
+            hashedName:       "{{.HashedName}}",
+            hash:             "{{.Hash}}",
+            embedPath:        "{{.EmbedPath}}",
+            isCompressed:     {{.IsCompressed}},
+            mtime:            time.Unix({{.ModTime.Unix}}, 0),
+            uncompressedSize: {{.UncompressedSize}},
+        },
     {{- end}}
     }
 )
 
-type assets struct {}
+type assets struct{}
+
 var Assets = assets{}
 
 func (a assets) Open(name string) (fs.File, error) {
@@ -71,35 +84,37 @@ func (a assets) Open(name string) (fs.File, error) {
         }
         return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
     }
-    hm := hashesMap[name]
-    data, err := embeddedFS.ReadFile(meta.embedPath)
+
+    raw, err := embeddedFS.ReadFile(meta.embedPath)
     if err != nil {
         return nil, &fs.PathError{Op: "open", Path: name, Err: err}
     }
 
     if meta.isCompressed {
-        dec, err := zstd.NewReader(bytes.NewReader(data))
+        dec := decoderPool.Get().(*zstd.Decoder)
+        decompressed, err := dec.DecodeAll(raw, nil)
+        decoderPool.Put(dec)
         if err != nil {
             return nil, &fs.PathError{Op: "open", Path: name, Err: err}
         }
-        return &compressedFile{
+        return &file{
             name:       meta.name,
-            hashedName: hm[0],
-            hash:       hm[1],
+            hashedName: meta.hashedName,
+            hash:       meta.hash,
             mtime:      meta.mtime,
-            size:       meta.uncompressedSize,
-            decoder:    dec,
-            data:       data,
+            size:       int64(len(decompressed)),
+            data:       bytes.NewReader(decompressed),
+            zstdData:   raw,
         }, nil
     }
 
     return &file{
         name:       meta.name,
-        hashedName: hm[0],
-        hash:       hm[1],
+        hashedName: meta.hashedName,
+        hash:       meta.hash,
         mtime:      meta.mtime,
-        size:       int64(len(data)),
-        data:       bytes.NewReader(data),
+        size:       int64(len(raw)),
+        data:       bytes.NewReader(raw),
     }, nil
 }
 
@@ -111,16 +126,16 @@ func (a assets) ReadDir(name string) ([]fs.DirEntry, error) {
 }
 
 func (a assets) HashedByPath(name string) string {
-    if h, ok := hashesMap[name]; ok {
-        return h[0]
+    if m, ok := fileMetas[name]; ok {
+        return m.hashedName
     }
     return name
 }
 
 type dirFile struct {
-    name string
+    name    string
     entries []fs.DirEntry
-    offset int
+    offset  int
 }
 
 var _ fs.ReadDirFile = (*dirFile)(nil)
@@ -154,12 +169,13 @@ func (d *dirFile) ReadDir(n int) ([]fs.DirEntry, error) {
 }
 
 type file struct {
-    name string
+    name       string
     hashedName string
-    hash string
-    mtime time.Time
-    size int64
-    data io.ReadSeeker
+    hash       string
+    mtime      time.Time
+    size       int64
+    data       *bytes.Reader
+    zstdData   []byte
 }
 
 var _ io.ReadSeeker = (*file)(nil)
@@ -176,87 +192,24 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
     return f.data.Seek(offset, whence)
 }
 
-func (f *file) Close() error { return nil }
-
-func (f *file) HashedName() string { return f.hashedName }
-func (f *file) Hash() string { return f.hash }
-
-type compressedFile struct {
-    name string
-    hashedName string
-    hash string
-    mtime time.Time
-    size int64
-    decoder *zstd.Decoder
-    data []byte
-    zstdPos int64
-    seekPos int64
-}
-
-var _ io.ReadSeeker = (*compressedFile)(nil)
-
-func (f *compressedFile) Stat() (fs.FileInfo, error) {
-    return &fileinfo{name: f.name, size: f.size, mtime: f.mtime, isDir: false}, nil
-}
-
-func (f *compressedFile) Read(p []byte) (int, error) {
-    if f.zstdPos > f.seekPos {
-        if err := f.decoder.Reset(bytes.NewReader(f.data)); err != nil {
-            return 0, err
-        }
-        f.zstdPos = 0
-    }
-    if f.zstdPos < f.seekPos {
-        if _, err := io.CopyN(io.Discard, f.decoder, f.seekPos-f.zstdPos); err != nil {
-            return 0, err
-        }
-        f.zstdPos = f.seekPos
-    }
-    n, err := f.decoder.Read(p)
-    f.zstdPos += int64(n)
-    f.seekPos = f.zstdPos
-    return n, err
-}
-
-func (f *compressedFile) Seek(offset int64, whence int) (int64, error) {
-    var newPos int64
-    switch whence {
-    case io.SeekStart:
-        newPos = offset
-    case io.SeekCurrent:
-        newPos = f.seekPos + offset
-    case io.SeekEnd:
-        newPos = f.size + offset
-    default:
-        return 0, fs.ErrInvalid
-    }
-    if newPos < 0 {
-        return 0, &fs.PathError{Op: "seek", Path: f.name, Err: fs.ErrInvalid}
-    }
-    f.seekPos = newPos
-    return f.seekPos, nil
-}
-
-func (f *compressedFile) Close() error {
-    f.decoder.Close()
+func (f *file) Close() error {
     return nil
 }
 
-func (f *compressedFile) HashedName() string { return f.hashedName }
-func (f *compressedFile) Hash() string { return f.hash }
-
-func (f *compressedFile) ZstdBytes() []byte { return f.data }
+func (f *file) HashedName() string { return f.hashedName }
+func (f *file) Hash() string       { return f.hash }
+func (f *file) ZstdBytes() []byte  { return f.zstdData }
 
 type fileinfo struct {
-    name string
-    size int64
+    name  string
+    size  int64
     mtime time.Time
     isDir bool
 }
 
 func (f fileinfo) Name() string       { return f.name }
 func (f fileinfo) Size() int64        { return f.size }
-func (f fileinfo) Mode() fs.FileMode  {
+func (f fileinfo) Mode() fs.FileMode {
     if f.isDir {
         return 0o755 | fs.ModeDir
     }
@@ -267,11 +220,12 @@ func (f fileinfo) IsDir() bool        { return f.isDir }
 func (f fileinfo) Sys() any           { return nil }
 
 type direntry struct {
-    name string
+    name  string
     isDir bool
     mtime time.Time
-    size int64
+    size  int64
 }
+
 func (d direntry) Name() string { return d.name }
 func (d direntry) IsDir() bool  { return d.isDir }
 func (d direntry) Type() fs.FileMode {

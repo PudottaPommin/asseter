@@ -143,9 +143,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Test Hash and HashedName on file
+	type fileDetails interface {
+		Hash() string
+		HashedName() string
+	}
+	fd, ok := f.(fileDetails)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "f does not implement fileDetails\n")
+		os.Exit(1)
+	}
+	if len(fd.Hash()) != 16 {
+		fmt.Fprintf(os.Stderr, "expected 16-char hash, got %%d chars: %%s\n", len(fd.Hash()), fd.Hash())
+		os.Exit(1)
+	}
+
 	hashed := assets.Assets.HashedByPath("css/style.css")
 	if hashed == "" || hashed == "css/style.css" {
 		fmt.Fprintf(os.Stderr, "expected valid hashed name, got %%s\n", hashed)
+		os.Exit(1)
+	}
+	if hashed != fd.HashedName() {
+		fmt.Fprintf(os.Stderr, "expected hashed name %%s, got %%s\n", fd.HashedName(), hashed)
 		os.Exit(1)
 	}
 
@@ -178,6 +197,36 @@ func main() {
 	if err != nil || string(tdata) != "hi" {
 		fmt.Fprintf(os.Stderr, "unexpected tiny.txt content: %%s, err: %%v\n", string(tdata), err)
 		os.Exit(1)
+	}
+
+	// Test concurrent access (pool safety)
+	const goroutines = 20
+	errCh := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			cf, err := assets.Assets.Open("css/style.css")
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer cf.Close()
+			cdata, err := io.ReadAll(cf)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if len(cdata) != expectedLen {
+				errCh <- fmt.Errorf("unexpected length: %%d", len(cdata))
+				return
+			}
+			errCh <- nil
+		}()
+	}
+	for i := 0; i < goroutines; i++ {
+		if err := <-errCh; err != nil {
+			fmt.Fprintf(os.Stderr, "concurrency error: %%v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Println("OK")
@@ -219,6 +268,53 @@ require (
 	if strings.TrimSpace(stdout.String()) != "OK" {
 		t.Fatalf("Unexpected output from test program: %s", stdout.String())
 	}
+
+	benchTestContent := `package main
+
+import (
+	"io"
+	"testing"
+
+	"testmod/assets"
+)
+
+func BenchmarkOpenCompressed(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		f, err := assets.Assets.Open("css/style.css")
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, f)
+		_ = f.Close()
+	}
+}
+
+func BenchmarkOpenUncompressed(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		f, err := assets.Assets.Open("images/tiny.txt")
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, f)
+		_ = f.Close()
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(modDir, "assets_bench_test.go"), []byte(benchTestContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	benchCmd := exec.Command("go", "test", "-tags", "bindata", "-bench", ".", "-benchmem", "assets_bench_test.go")
+	benchCmd.Dir = modDir
+	var benchOut bytes.Buffer
+	benchCmd.Stdout = &benchOut
+	benchCmd.Stderr = &benchOut
+	if err := benchCmd.Run(); err != nil {
+		t.Fatalf("Benchmark failed: %v\n%s", err, benchOut.String())
+	}
+	t.Logf("Benchmark results:\n%s", benchOut.String())
 }
 
 func TestAssetsFsGeneratorCustomEmbedDir(t *testing.T) {

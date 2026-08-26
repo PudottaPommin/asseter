@@ -212,7 +212,8 @@ func (h *AssetsFsHandler) Run() error {
 }
 
 func hashBytes(b []byte) string {
-	return fmt.Sprintf("%x", sha256.Sum256(b))
+	h := sha256.Sum256(b)
+	return fmt.Sprintf("%x", h[:8])
 }
 
 func (f file) HashedName() string {
