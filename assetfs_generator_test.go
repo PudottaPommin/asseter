@@ -1,4 +1,4 @@
-package asseter_test
+package asseter_test //nolint:cyclop // tests
 
 import (
 	"bytes"
@@ -13,40 +13,41 @@ import (
 )
 
 func TestAssetsFsGenerator(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 
 	srcDir := filepath.Join(tempDir, "src")
-	if err := os.MkdirAll(filepath.Join(srcDir, "css"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(srcDir, "css"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(srcDir, "images"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(srcDir, "images"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	compressibleContent := []byte(strings.Repeat("body { background-color: #ffffff; color: #000000; }\n", 100))
-	if err := os.WriteFile(filepath.Join(srcDir, "css", "style.css"), compressibleContent, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "css", "style.css"), compressibleContent, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	tinyContent := []byte("hi")
-	if err := os.WriteFile(filepath.Join(srcDir, "images", "tiny.txt"), tinyContent, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "images", "tiny.txt"), tinyContent, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	outDir := filepath.Join(tempDir, "assets")
-	if err := os.MkdirAll(outDir, 0755); err != nil {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	outFile := filepath.Join(outDir, "bindata.asseter.go")
 
-	handler, err := asseter.NewAssetsFsHandler(asseter.AssetsFsOptions{
+	handler, hErr := asseter.NewAssetsFsHandler(asseter.AssetsFsOptions{
 		Src:      srcDir,
 		Pkg:      "assets",
 		Out:      outFile,
 		EmbedDir: "_embed",
 	})
-	if err != nil {
-		t.Fatalf("NewAssetsFsHandler failed: %v", err)
+	if hErr != nil {
+		t.Fatalf("NewAssetsFsHandler failed: %v", hErr)
 	}
 
 	if err := handler.Run(); err != nil {
@@ -67,9 +68,9 @@ func TestAssetsFsGenerator(t *testing.T) {
 		t.Fatalf("Expected compressed file %s to exist: %v", cssZst, err)
 	}
 
-	content, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatal(err)
+	content, readErr := os.ReadFile(outFile)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	goCode := string(content)
 
@@ -242,10 +243,10 @@ require (
 	github.com/klauspost/compress v1.18.6
 )
 `
-	if err := os.WriteFile(filepath.Join(modDir, "go.mod"), []byte(goModContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(modDir, "go.mod"), []byte(goModContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(modDir, "main.go"), []byte(mainGoContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(modDir, "main.go"), []byte(mainGoContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -262,7 +263,12 @@ require (
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to run test program with generated assets:\nerr: %v\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String())
+		t.Fatalf(
+			"Failed to run test program with generated assets:\nerr: %v\nstderr: %s\nstdout: %s",
+			err,
+			stderr.String(),
+			stdout.String(),
+		)
 	}
 
 	if strings.TrimSpace(stdout.String()) != "OK" {
@@ -302,7 +308,7 @@ func BenchmarkOpenUncompressed(b *testing.B) {
 	}
 }
 `
-	if err := os.WriteFile(filepath.Join(modDir, "assets_bench_test.go"), []byte(benchTestContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(modDir, "assets_bench_test.go"), []byte(benchTestContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -318,30 +324,31 @@ func BenchmarkOpenUncompressed(b *testing.B) {
 }
 
 func TestAssetsFsGeneratorCustomEmbedDir(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 
 	srcDir := filepath.Join(tempDir, "src")
-	if err := os.MkdirAll(srcDir, 0755); err != nil {
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(srcDir, "hello.txt"), []byte("hello world"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(srcDir, "hello.txt"), []byte("hello world"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	outDir := filepath.Join(tempDir, "pkg")
-	if err := os.MkdirAll(outDir, 0755); err != nil {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	outFile := filepath.Join(outDir, "bindata.go")
 
-	handler, err := asseter.NewAssetsFsHandler(asseter.AssetsFsOptions{
+	handler, hErr := asseter.NewAssetsFsHandler(asseter.AssetsFsOptions{
 		Src:      srcDir,
 		Pkg:      "pkg",
 		Out:      outFile,
 		EmbedDir: "_custom_assets",
 	})
-	if err != nil {
-		t.Fatalf("NewAssetsFsHandler failed: %v", err)
+	if hErr != nil {
+		t.Fatalf("NewAssetsFsHandler failed: %v", hErr)
 	}
 
 	if err := handler.Run(); err != nil {
@@ -353,9 +360,9 @@ func TestAssetsFsGeneratorCustomEmbedDir(t *testing.T) {
 		t.Fatalf("Expected custom embed dir %s to exist: %v", customDir, err)
 	}
 
-	content, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatal(err)
+	content, readErr := os.ReadFile(outFile)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	if !strings.Contains(string(content), "//go:embed all:_custom_assets") {
 		t.Errorf("Expected //go:embed all:_custom_assets in generated code")
@@ -364,4 +371,3 @@ func TestAssetsFsGeneratorCustomEmbedDir(t *testing.T) {
 		t.Errorf("Expected _custom_assets/hello.txt in generated code")
 	}
 }
-

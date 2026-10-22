@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/pudottapommin/asseter"
 	"github.com/urfave/cli/v3"
+
+	"github.com/pudottapommin/asseter"
 )
 
 var version = "dev"
@@ -37,7 +39,7 @@ func newApp() *cli.Command {
 						Usage: "Working directory ( where are node_modules )",
 					},
 					&cli.StringFlag{
-						Name:  "src",
+						Name:  "src", //nolint:goconst // noop
 						Value: "src",
 						Usage: "Source directory for assets",
 					},
@@ -110,8 +112,8 @@ func validateCopyFlags(ctx context.Context, cmd *cli.Command) (context.Context, 
 	if err != nil {
 		return ctx, fmt.Errorf("failed to resolve src path: %w", err)
 	}
-	if info, err := os.Stat(absSrc); err != nil {
-		return ctx, fmt.Errorf("failed to access src path: %w", err)
+	if info, statErr := os.Stat(absSrc); statErr != nil {
+		return ctx, fmt.Errorf("failed to access src path: %w", statErr)
 	} else if !info.IsDir() {
 		return ctx, fmt.Errorf("src must be a directory: %s", absSrc)
 	}
@@ -154,8 +156,8 @@ func validateGenerateFlags(ctx context.Context, cmd *cli.Command) (context.Conte
 	if err != nil {
 		return ctx, fmt.Errorf("failed to resolve src path: %w", err)
 	}
-	if info, err := os.Stat(absSrc); err != nil {
-		return ctx, fmt.Errorf("failed to access src path: %w", err)
+	if info, statErr := os.Stat(absSrc); statErr != nil {
+		return ctx, fmt.Errorf("failed to access src path: %w", statErr)
 	} else if !info.IsDir() {
 		return ctx, fmt.Errorf("src must be a directory: %s", absSrc)
 	}
@@ -169,12 +171,12 @@ func validateGenerateFlags(ctx context.Context, cmd *cli.Command) (context.Conte
 	if err != nil {
 		return ctx, fmt.Errorf("failed to resolve out path: %w", err)
 	}
-	if info, err := os.Stat(absOut); err == nil && info.IsDir() {
+	if info, statErr := os.Stat(absOut); statErr == nil && info.IsDir() {
 		absOut = filepath.Join(absOut, "bindata.asseter.go")
 	}
 
 	outDir := filepath.Dir(absOut)
-	if info, err := os.Stat(outDir); err != nil {
+	if info, statErr := os.Stat(outDir); statErr != nil {
 		return ctx, fmt.Errorf("output directory does not exist: %s", outDir)
 	} else if !info.IsDir() {
 		return ctx, fmt.Errorf("output path parent is not a directory: %s", outDir)
@@ -231,7 +233,7 @@ func handleCopy(ctx context.Context, cmd *cli.Command) error {
 	if err = handler.Run(ctx); err != nil {
 		return err
 	}
-	fmt.Printf("Successfully copied assets in %v\n", time.Since(t))
+	log.Printf("Successfully copied assets in %v\n", time.Since(t))
 	return nil
 }
 
@@ -251,6 +253,6 @@ func handleGen(_ context.Context, cmd *cli.Command) error {
 	if err = handler.Run(); err != nil {
 		return err
 	}
-	fmt.Printf("Successfully generated assets in %v\n", time.Since(t))
+	log.Printf("Successfully generated assets in %v\n", time.Since(t))
 	return nil
 }

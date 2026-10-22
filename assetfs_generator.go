@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"go/format"
 	"io"
@@ -91,7 +92,7 @@ func (h *AssetsFsHandler) Run() error {
 	if err = os.RemoveAll(absEmbedDir); err != nil {
 		return fmt.Errorf("failed to remove existing embed dir %s: %w", absEmbedDir, err)
 	}
-	if err = os.MkdirAll(absEmbedDir, 0o755); err != nil {
+	if err = os.MkdirAll(absEmbedDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create embed dir %s: %w", absEmbedDir, err)
 	}
 
@@ -100,91 +101,119 @@ func (h *AssetsFsHandler) Run() error {
 
 	var cmpBuf []byte
 
-	if err = fs.WalkDir(rfs, ".", func(fp string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	if err = fs.WalkDir(rfs, ".", func(fp string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 
 		if d.IsDir() {
-			entries, err := fs.ReadDir(rfs, fp)
-			if err != nil {
-				return err
-			}
-			dirEntries := make([]direntry, 0, len(entries))
-			for i := range entries {
-				fi, _ := entries[i].Info()
-				var mt time.Time
-				var sz int64
-				if fi != nil {
-					mt = fi.ModTime()
-					sz = fi.Size()
-				}
-				dirEntries = append(dirEntries, direntry{
-					Name:    entries[i].Name(),
-					IsDir:   entries[i].IsDir(),
-					ModTime: mt,
-					Size:    sz,
-				})
+			dirEntries, dirErr := h.processDir(rfs, fp)
+			if dirErr != nil {
+				return dirErr
 			}
 			dirs[fp] = dirEntries
 			return nil
 		}
 
-		src, err := fs.ReadFile(rfs, fp)
-		if err != nil {
-			return err
+		f, newBuf, fileErr := h.processFile(rfs, fp, d, enc, absEmbedDir, cmpBuf)
+		if fileErr != nil {
+			return fileErr
 		}
-
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-
-		cmpBuf = enc.EncodeAll(src, cmpBuf[:0])
-
-		var (
-			embedRelPath string
-			isCompressed bool
-			dataToWrite  []byte
-		)
-
-		if len(cmpBuf) < len(src) {
-			embedRelPath = fp + ".zst"
-			isCompressed = true
-			dataToWrite = make([]byte, len(cmpBuf))
-			copy(dataToWrite, cmpBuf)
-		} else {
-			embedRelPath = fp
-			isCompressed = false
-			dataToWrite = src
-		}
-
-		embedPath := path.Join(h.embedDir, filepath.ToSlash(embedRelPath))
-		outFilePath := filepath.Join(absEmbedDir, filepath.FromSlash(embedRelPath))
-		if err = os.MkdirAll(filepath.Dir(outFilePath), 0o755); err != nil {
-			return fmt.Errorf("failed to create directory for %s: %w", outFilePath, err)
-		}
-		if err = os.WriteFile(outFilePath, dataToWrite, 0o644); err != nil {
-			return fmt.Errorf("failed to write embedded asset %s: %w", outFilePath, err)
-		}
-
-		files = append(files, file{
-			Path:             fp,
-			Name:             path.Base(fp),
-			Hash:             hashBytes(src),
-			ModTime:          fi.ModTime(),
-			UncompressedSize: len(src),
-			EmbedPath:        embedPath,
-			IsCompressed:     isCompressed,
-		})
+		cmpBuf = newBuf
+		files = append(files, f)
 		return nil
 	}); err != nil {
 		return err
 	}
 
+	return h.renderOutput(files, dirs)
+}
+
+func (h *AssetsFsHandler) processDir(rfs fs.FS, fp string) ([]direntry, error) {
+	entries, err := fs.ReadDir(rfs, fp)
+	if err != nil {
+		return nil, err
+	}
+	dirEntries := make([]direntry, 0, len(entries))
+	for i := range entries {
+		fi, _ := entries[i].Info()
+		var mt time.Time
+		var sz int64
+		if fi != nil {
+			mt = fi.ModTime()
+			sz = fi.Size()
+		}
+		dirEntries = append(dirEntries, direntry{
+			Name:    entries[i].Name(),
+			IsDir:   entries[i].IsDir(),
+			ModTime: mt,
+			Size:    sz,
+		})
+	}
+	return dirEntries, nil
+}
+
+func (h *AssetsFsHandler) processFile(
+	rfs fs.FS,
+	fp string,
+	d fs.DirEntry,
+	enc *zstd.Encoder,
+	absEmbedDir string,
+	cmpBuf []byte,
+) (file, []byte, error) {
+	src, err := fs.ReadFile(rfs, fp)
+	if err != nil {
+		return file{}, nil, err
+	}
+
+	fi, err := d.Info()
+	if err != nil {
+		return file{}, nil, err
+	}
+
+	cmpBuf = enc.EncodeAll(src, cmpBuf[:0])
+
+	var (
+		embedRelPath string
+		isCompressed bool
+		dataToWrite  []byte
+	)
+
+	if len(cmpBuf) < len(src) {
+		embedRelPath = fp + ".zst"
+		isCompressed = true
+		dataToWrite = make([]byte, len(cmpBuf))
+		copy(dataToWrite, cmpBuf)
+	} else {
+		embedRelPath = fp
+		isCompressed = false
+		dataToWrite = src
+	}
+
+	embedPath := path.Join(h.embedDir, filepath.ToSlash(embedRelPath))
+	outFilePath := filepath.Join(absEmbedDir, filepath.FromSlash(embedRelPath))
+	if err = os.MkdirAll(filepath.Dir(outFilePath), 0o750); err != nil {
+		return file{}, nil, fmt.Errorf("failed to create directory for %s: %w", outFilePath, err)
+	}
+	if err = os.WriteFile(outFilePath, dataToWrite, 0o600); err != nil {
+		return file{}, nil, fmt.Errorf("failed to write embedded asset %s: %w", outFilePath, err)
+	}
+
+	return file{
+		Path:             fp,
+		Name:             path.Base(fp),
+		Hash:             hashBytes(src),
+		ModTime:          fi.ModTime(),
+		UncompressedSize: len(src),
+		EmbedPath:        embedPath,
+		IsCompressed:     isCompressed,
+	}, cmpBuf, nil
+}
+
+func (h *AssetsFsHandler) renderOutput(files []file, dirs map[string][]direntry) error {
 	buffer := bytebufferpool.Get()
 	defer bytebufferpool.Put(buffer)
-	if err = tmpl.ExecuteTemplate(buffer, "assetsfs.gotmpl", assetsFsTemplateModel{
+	if err := tmpl.ExecuteTemplate(buffer, "assetsfs.gotmpl", assetsFsTemplateModel{
 		Pkg:      h.pkg,
 		EmbedDir: h.embedDir,
 		Files:    files,
@@ -193,12 +222,12 @@ func (h *AssetsFsHandler) Run() error {
 		return fmt.Errorf("failed render outfile.go: %w", err)
 	}
 
-	var formatted []byte
-	if formatted, err = format.Source(buffer.Bytes()); err != nil {
+	formatted, err := format.Source(buffer.Bytes())
+	if err != nil {
 		return fmt.Errorf("failed format %s: %w", h.out, err)
 	}
 
-	out, err := os.OpenFile(h.out, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	out, err := os.OpenFile(h.out, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -213,7 +242,7 @@ func (h *AssetsFsHandler) Run() error {
 
 func hashBytes(b []byte) string {
 	h := sha256.Sum256(b)
-	return fmt.Sprintf("%x", h[:8])
+	return hex.EncodeToString(h[:8])
 }
 
 func (f file) HashedName() string {
@@ -228,5 +257,5 @@ func (f file) HashedName() string {
 var (
 	//go:embed layeredfs.gotmpl
 	tplFs string
-	tmpl  = template.Must(template.New("").Parse(tplFs))
+	tmpl  = template.Must(template.New("").Parse(tplFs)) //nolint:gochecknoglobals // noop
 )
