@@ -1,36 +1,37 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# Ignore everything by default
+*
 
+# Re-include all directories so git can traverse into them
+!*/
 
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Repo meta
+!.gitignore
+!.gitattributes
+!LICENSE
+!README.md
+!AGENTS.md
+!CLAUDE.md
 
-# Test binary, built with `go test -c`
-*.test
+# Go source and module files
+!*.go
+!*.gotmpl
+!go.mod
+!go.sum
 
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
-*.coverprofile
-profile.cov
+# Tooling config
+!.golangci.yml
+!.goreleaser.yaml
+!justfile
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# CI
+!.github/**/*.yml
+!.github/**/*.yaml
 
-# Go workspace file
-go.work
-go.work.sum
+# Test fixtures (keep anything under testdata)
+!testdata/**
 
-# env file
-.env
-
-# Editor/IDE
-.jj
-# .idea/
-# .vscode/
-# Added by goreleaser init:
-artifacts/
+# Exceptions: re-ignore things the allow rules would otherwise catch
+/artifacts/
+/vendor/
+/dist/
+/bin/

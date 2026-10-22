@@ -38,31 +38,33 @@ type (
 	}
 )
 
-func NewCopyHandler(opts CopyOptions) (cmd *CopyHandler, err error) {
-	cmd = &CopyHandler{
+func NewCopyHandler(opts CopyOptions) (*CopyHandler, error) {
+	cmd := &CopyHandler{
 		cwd:          opts.Cwd,
 		srcDir:       opts.SrcDir,
 		distDir:      opts.DistDir,
+		distFontsDir: opts.DistFontsDir,
+		urlBase:      "",
 		exclude:      opts.Exclude,
 		fonts:        opts.Fonts,
-		distFontsDir: opts.DistFontsDir,
 		isSetup:      true,
+		filesCh:      nil,
 	}
-	if err = cmd.normalizeDirPaths(); err != nil {
+	if err := cmd.normalizeDirPaths(); err != nil {
 		return nil, err
 	}
-	return
+	return cmd, nil
 }
 
-func (cmd *CopyHandler) Run(ctx context.Context) (err error) {
+func (cmd *CopyHandler) Run(ctx context.Context) error {
 	if !cmd.isSetup {
 		return errors.New("CopyHandler is not setup")
 	}
 
 	cmd.filesCh = make(chan string)
 	g, gctx := errgroup.WithContext(ctx)
-	if err = cmd.cleanDest(gctx); err != nil {
-		return
+	if err := cmd.cleanDest(gctx); err != nil {
+		return err
 	}
 	g.Go(func() error {
 		return cmd.walkSources(gctx)
@@ -71,21 +73,21 @@ func (cmd *CopyHandler) Run(ctx context.Context) (err error) {
 		return cmd.walkFonts(gctx)
 	})
 	go func() {
-		g.Wait()
+		_ = g.Wait()
 		close(cmd.filesCh)
 	}()
 
-	paths := make([]string, 0, 10)
+	paths := make([]string, 0, 12) //nolint:mnd // just a arbitrary number
 	for fc := range cmd.filesCh {
 		paths = append(paths, fc)
 	}
-	if err = g.Wait(); err != nil {
+	if err := g.Wait(); err != nil {
 		return err
 	}
 
 	buffer := new(bytes.Buffer)
 	for _, p := range paths {
-		if err = cmd.copyFile(buffer, p); err != nil {
+		if err := cmd.copyFile(buffer, p); err != nil {
 			return err
 		}
 	}
@@ -93,9 +95,30 @@ func (cmd *CopyHandler) Run(ctx context.Context) (err error) {
 	return nil
 }
 
+func (cmd *CopyHandler) resolveDestinationPath(p string, name string) (string, error) {
+	if matched, _ := filepath.Match("*.woff2", name); matched {
+		if err := os.MkdirAll(cmd.distFontsDir, 0o750); err != nil {
+			return "", err
+		}
+		return filepath.Join(cmd.distFontsDir, filepath.Base(p)), nil
+	}
+
+	rel, err := filepath.Rel(cmd.srcDir, p)
+	var distFilePath string
+	if err != nil || strings.HasPrefix(rel, "..") {
+		distFilePath = filepath.Join(cmd.distDir, filepath.Base(p))
+	} else {
+		distFilePath = filepath.Join(cmd.distDir, rel)
+	}
+	if mkdirErr := os.MkdirAll(filepath.Dir(distFilePath), 0o750); mkdirErr != nil {
+		return "", mkdirErr
+	}
+	return distFilePath, nil
+}
+
 func (cmd *CopyHandler) copyFile(buffer *bytes.Buffer, p string) error {
 	defer buffer.Reset()
-	src, err := os.OpenFile(p, os.O_RDONLY, 0644)
+	src, err := os.OpenFile(p, os.O_RDONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -104,27 +127,12 @@ func (cmd *CopyHandler) copyFile(buffer *bytes.Buffer, p string) error {
 	if err != nil {
 		return err
 	}
-	var distFilePath string
-	if matched, _ := filepath.Match("*.woff2", info.Name()); matched {
-		if _, err = os.Stat(cmd.distFontsDir); err != nil {
-			if os.IsNotExist(err) {
-				if err = os.MkdirAll(cmd.distFontsDir, 0755); err != nil {
-					return err
-				}
-			}
-		}
-		distFilePath = filepath.Join(cmd.distFontsDir, filepath.Base(p))
-	} else {
-		rel, err := filepath.Rel(cmd.srcDir, p)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			distFilePath = filepath.Join(cmd.distDir, filepath.Base(p))
-		} else {
-			distFilePath = filepath.Join(cmd.distDir, rel)
-		}
-		if err := os.MkdirAll(filepath.Dir(distFilePath), 0755); err != nil {
-			return err
-		}
+
+	distFilePath, err := cmd.resolveDestinationPath(p, info.Name())
+	if err != nil {
+		return err
 	}
+
 	dst, err := os.OpenFile(distFilePath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, info.Mode())
 	if err != nil {
 		return err
@@ -172,37 +180,38 @@ func (cmd *CopyHandler) walkSources(ctx context.Context) error {
 	})
 }
 
-func (cmd *CopyHandler) walkFonts(ctx context.Context) (err error) {
-	if len(cmd.fonts) > 0 {
-		nodeModulesDir := filepath.ToSlash(path.Join(cmd.cwd, "node_modules"))
-		err = filepath.WalkDir(nodeModulesDir, func(p string, de fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			p = filepath.ToSlash(p)
-			if matched := strings.Contains(p, "@fontsource"); !matched {
-				return nil
-			}
-			if matched := cmd.fonts.Match(de.Name()); !matched {
-				return nil
-			}
-			select {
-			case cmd.filesCh <- p:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			return nil
-		})
+func (cmd *CopyHandler) walkFonts(ctx context.Context) error {
+	if len(cmd.fonts) == 0 {
+		return nil
 	}
-	return
+	nodeModulesDir := filepath.ToSlash(path.Join(cmd.cwd, "node_modules"))
+	return filepath.WalkDir(nodeModulesDir, func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		p = filepath.ToSlash(p)
+		if matched := strings.Contains(p, "@fontsource"); !matched {
+			return nil
+		}
+		if matched := cmd.fonts.Match(de.Name()); !matched {
+			return nil
+		}
+		select {
+		case cmd.filesCh <- p:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	})
 }
 
-func (cmd *CopyHandler) normalizeDirPaths() (err error) {
+func (cmd *CopyHandler) normalizeDirPaths() error {
 	if cmd.cwd == "" {
-		cmd.cwd, err = os.Getwd()
+		cwd, err := os.Getwd()
 		if err != nil {
-			return
+			return err
 		}
+		cmd.cwd = cwd
 	}
 	cmd.cwd = filepath.ToSlash(filepath.Clean(cmd.cwd))
 
@@ -221,45 +230,65 @@ func (cmd *CopyHandler) normalizeDirPaths() (err error) {
 	}
 	cmd.distFontsDir = filepath.ToSlash(filepath.Clean(cmd.distFontsDir))
 
-	return
+	return nil
 }
 
-func (cmd *CopyHandler) cleanDest(ctx context.Context) (err error) {
-	if _, err = os.Stat(cmd.distDir); err != nil {
+func (cmd *CopyHandler) cleanDest(ctx context.Context) error {
+	if _, err := os.Stat(cmd.distDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return os.Mkdir(cmd.distDir, 0755)
+			return os.Mkdir(cmd.distDir, 0o750)
 		}
 		return err
 	}
-	dirs := make([]string, 0, 4)
-	err = filepath.WalkDir(cmd.distDir, func(p string, de fs.DirEntry, err error) error {
+	dirs := make([]string, 0, 4) //nolint:mnd //noop
+	filesToRemove := make([]string, 0)
+	if err := filepath.WalkDir(cmd.distDir, func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 		p = filepath.ToSlash(p)
 		if de.IsDir() {
 			dirs = append(dirs, p)
 			return nil
 		}
 		if !cmd.exclude.Match(p) || cmd.fonts.Match(filepath.Base(p)) {
-			return os.Remove(p)
+			filesToRemove = append(filesToRemove, p)
 		}
 		return nil
-	})
-	if err == nil {
-		for _, d := range slices.Backward(dirs) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-				switch e, err := os.ReadDir(d); {
-				case err != nil:
-					return err
-				case len(e) == 0:
-					if err = os.Remove(d); err != nil {
-						return err
-					}
-				}
+	}); err != nil {
+		return err
+	}
 
+	for _, p := range filesToRemove {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
 			}
 		}
 	}
-	return
+
+	return cmd.cleanEmptyDirs(ctx, dirs)
+}
+
+func (cmd *CopyHandler) cleanEmptyDirs(ctx context.Context, dirs []string) error {
+	for _, d := range slices.Backward(dirs) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			entries, err := os.ReadDir(d)
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				if rmErr := os.Remove(d); rmErr != nil {
+					return rmErr
+				}
+			}
+		}
+	}
+	return nil
 }
